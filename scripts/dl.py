@@ -493,6 +493,13 @@ FINGERPRINTS = {
         "markers": {"queue-based (BFS)": _rx(r"\bqueue\b.*(shift|pop|dequeue)|(shift|dequeue)\(\)", re.I),
                     "recursive (DFS)": _rx(r"\bdfs\b|\bvisit\w*\(", re.I)},
     },
+    "linked list / free-list allocator": {
+        "required": [_rx(r"(->|\.)next\b"), _rx(r"\b\w+\s*=\s*\w+(->|\.)next\b")],
+        "markers": {
+            "allocator free list": _rx(r"coalesc\w*|find_?free\w*|free_?list|first.?fit|best.?fit|split_?block", re.I),
+            "doubly linked": _rx(r"(->|\.)prev\b"),
+        },
+    },
     "topological sort": {
         "required": [_rx(r"in_?degree|topolog", re.I)],
         "markers": {},
@@ -502,6 +509,13 @@ FINGERPRINTS = {
         "markers": {},
     },
 }
+
+
+TEST_PATH_RX = re.compile(r"(^|/)(tests?|__tests__|spec|specs|e2e|fixtures?)(/|$)|[._-](test|spec)\.\w+$|_test\.go$")
+
+
+def is_test_path(rel):
+    return bool(TEST_PATH_RX.search(rel.replace(os.sep, "/")))
 
 
 def fingerprint_file(text):
@@ -524,8 +538,11 @@ def cmd_fingerprint(args):
         die(f"unknown repo {args.alias!r}")
     root = repos[args.alias]["path"]
     wanted = [k.lower() for k in args.kind]
-    found = {}
+    found, skipped_tests = {}, 0
     for fp in walk(root, CODE_EXT, args.include_deps):
+        if not args.tests and is_test_path(os.path.relpath(fp, root)):
+            skipped_tests += 1
+            continue
         try:
             if os.path.getsize(fp) > args.max_bytes:
                 continue
@@ -537,10 +554,11 @@ def cmd_fingerprint(args):
             if wanted and not any(w in name.lower() for w in wanted):
                 continue
             found.setdefault(name, []).append((os.path.relpath(fp, root), line, marks))
+    note = f" ({skipped_tests} test files skipped; --tests to include)" if skipped_tests else ""
     if not found:
-        print("no known data-structure shapes found")
+        print("no known data-structure shapes found" + note)
         return
-    print("Shape matches are leads, not conclusions: a researcher must read the code and confirm.")
+    print("Shape matches are leads, not conclusions: a researcher must read the code and confirm." + note)
     for name in sorted(found):
         rows = found[name]
         print(f"\n{name}  ({len(rows)} files)")
@@ -694,6 +712,7 @@ def main():
     p.add_argument("kind", nargs="*", help="limit to shapes whose name contains one of these")
     p.add_argument("--limit", type=int, default=8)
     p.add_argument("--include-deps", action="store_true")
+    p.add_argument("--tests", action="store_true", help="also scan test files (skipped by default)")
     p.add_argument("--max-bytes", type=int, default=400_000)
     p.set_defaults(fn=cmd_fingerprint)
 

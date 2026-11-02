@@ -264,6 +264,22 @@ class Fingerprints(Env):
         out = self.dl("fingerprint", "api", "ring").stdout
         self.assertIn("power-of-two mask", out)
 
+    def test_c_free_list_allocator(self):
+        self.write("src/malloc.c", "block_t *head = NULL;\nblock_t *find_free_block(size_t n) {\n"
+                   "  block_t *curr = head;\n  while (curr) { if (curr->size >= n) return curr; curr = curr->next; }\n"
+                   "  return NULL;\n}\nvoid ifree(void *p) { /* coalesce consecutive free blocks */ }\n")
+        out = self.dl("fingerprint", "api", "linked").stdout
+        self.assertIn("src/malloc.c", out)
+        self.assertIn("allocator free list", out)
+
+    def test_test_files_skipped_unless_asked(self):
+        self.write("test/lru.test.ts", "class LRU { evict() { this.map.delete(k) } }\n")
+        self.write("cache/lru_test.go", "func TestLRU() { c.evict(); l.MoveToFront(e) }\n")
+        out = self.dl("fingerprint", "api").stdout
+        self.assertIn("no known data-structure shapes", out)
+        self.assertIn("2 test files skipped", out)
+        self.assertIn("lru-cache", self.dl("fingerprint", "api", "--tests").stdout)
+
     def test_plain_code_matches_nothing(self):
         out = self.dl("fingerprint", "api").stdout
         self.assertIn("no known data-structure shapes", out)
