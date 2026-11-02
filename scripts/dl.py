@@ -727,7 +727,11 @@ def main():
     sub.add_parser("status", help="list concepts").set_defaults(fn=cmd_status)
 
     args = ap.parse_args()
-    args.fn(args)
+    try:
+        args.fn(args)
+        sys.stdout.flush()
+    except BrokenPipeError:  # e.g. `dl.py deps x | head`
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
 
 
 if __name__ == "__main__":
