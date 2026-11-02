@@ -39,6 +39,7 @@ CITE_RX = re.compile(
     r"`?([A-Za-z0-9_-]+):((?:[\w.@+-]+/)*[\w.@+-]+\.\w+):(\d+)(?:-(\d+))?`?")
 SYM_RX = re.compile(r"`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)`")
 QUOTE_RX = re.compile(r"<!--\s*quote\s+(\S+)\s*-->[ \t]*\n```[^\n]*\n(.*?)\n```", re.S)
+CAPTION_RX = re.compile(r"^\*[A-Za-z0-9_-]+:[^*\s]+:\d+(?:-\d+)?\*$")
 EXCERPT_RX = re.compile(r"\{\{\s*excerpt\s+(\S+?)\s*\}\}")
 
 
@@ -165,6 +166,8 @@ def check_line(line, repos, cache, max_range, require_tag=True):
     source), [theory] (background knowledge, never proof) or [inferred]. A tagged evidence line must
     cite code of the matching role, name at least one symbol, and that symbol must appear inside the
     cited range itself - not near it."""
+    if CAPTION_RX.match(line):
+        return []
     tags = TAG_RX.findall(line)
     cites = list(CITE_RX.finditer(line))
     known = [m for m in cites if m.group(1) in repos]
@@ -174,9 +177,11 @@ def check_line(line, repos, cache, max_range, require_tag=True):
         return problems
     tag = tags[0] if tags else None
     if tag is None:
-        if known and require_tag:
-            problems.append("cites code but carries no evidence tag ([code], [dep], [upstream], ...)")
-        return problems
+        if not known:
+            return []
+        if require_tag:
+            return ["cites code but carries no evidence tag ([code], [dep], [upstream], ...)"]
+        tag = "untagged"  # lesson prose: no role check, but the citation must still be real
     if tag in ("theory", "inferred"):
         if tag == "theory" and known:
             problems.append("[theory] line cites code; retag it [code]/[dep]/[upstream] or drop the citation")
@@ -192,7 +197,7 @@ def check_line(line, repos, cache, max_range, require_tag=True):
             problems.append(f"unknown repo alias {alias!r} (register it with: dl.py repo add)")
             continue
         role = repos[alias].get("role", "code")
-        if role != tag:
+        if tag != "untagged" and role != tag:
             problems.append(f"[{tag}] claim cites {alias!r}, which is registered as role {role!r}")
         full = resolve(repos, alias, path)
         if full is None:
@@ -218,7 +223,7 @@ def check_line(line, repos, cache, max_range, require_tag=True):
         if len(s) >= 3:
             syms.append(s)
     if not syms:
-        problems.append(f"[{tag}] claim names no symbol in backticks, so nothing can be verified")
+        problems.append("claim names no symbol in backticks, so nothing can be verified")
     elif ranges:
         body = "\n".join(text_parts)
         missing = [s for s in syms if not has_symbol(body, s)]

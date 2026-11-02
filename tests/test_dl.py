@@ -188,6 +188,18 @@ class LessonRules(Env):
         os.remove(os.path.join(self.home, "concepts", "queues", "lesson.md"))
         self.assertEqual(self.check("The ack lives in `Worker.run` (api:src/worker.ts:4-11).\n").returncode, 1)
 
+    def test_untagged_lesson_citation_is_still_verified(self):
+        self.cfile("lesson.md", "The ack is in `Worker.nothing` (api:src/worker.ts:4-11).\n")
+        r = self.dl("check", "queues", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not found inside the cited range", r.stdout)
+        self.cfile("lesson.md", "It lives in the old file (`Worker` api:src/gone.ts:1-3).\n")
+        self.assertIn("does not exist", self.dl("check", "queues", ok=False).stdout)
+
+    def test_expanded_caption_is_exempt(self):
+        self.cfile("lesson.md", "*api:src/worker.ts:4-11*\n")
+        self.assertEqual(self.dl("check", "queues", ok=False).returncode, 0)
+
     def test_tagged_claim_in_lesson_is_still_verified(self):
         self.cfile("lesson.md", "- [code] It acks (`Worker` api:src/worker.ts:4-11)\n")
         r = self.dl("check", "queues", ok=False)
