@@ -224,6 +224,23 @@ class LessonRules(Env):
         self.assertIn("not found inside the cited range", r.stdout)
 
 
+class MarkGate(Env):
+    def test_verified_and_taught_refused_while_check_fails(self):
+        self.cfile("notes.md", "- [code] bad claim (`nothere` api:src/worker.ts:4-11)\n")
+        for status in ("verified", "taught"):
+            r = self.dl("mark", "queues", "--status", status, ok=False)
+            self.assertEqual(r.returncode, 2, status)
+            self.assertIn("refusing to mark", r.stderr)
+        meta = json.load(open(os.path.join(self.home, "concepts", "queues", "meta.json")))
+        self.assertEqual(meta["status"], "new")
+
+    def test_taught_refused_when_only_the_lesson_fails(self):
+        self.cfile("notes.md", "- [code] acks late (`Worker` api:src/worker.ts:1-3)\n")
+        self.dl("mark", "queues", "--status", "verified")
+        self.cfile("lesson.md", "Wrong (`ack` api:src/worker.ts:1-3).\n")
+        self.assertEqual(self.dl("mark", "queues", "--status", "taught", ok=False).returncode, 2)
+
+
 class Staleness(Env):
     def learn(self):
         self.cfile("notes.md", "- [code] acks after success (`Worker.run` api:src/worker.ts:4-11)\n")

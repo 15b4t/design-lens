@@ -647,6 +647,12 @@ def cmd_mark(args):
     if args.status in ("researched", "verified", "taught"):
         if not os.path.exists(notes):
             die("notes.md does not exist yet; nothing to record")
+        _, bad, _ = run_check(home, args.concept, 80)
+        if bad:
+            for b in bad[:10]:
+                print("  " + b, file=sys.stderr)
+            die(f"{len(bad)} problem(s) from `check`; refusing to mark {args.concept!r} {args.status}. "
+                "Fix them (or drop the claims) first.")
         files = {}
         for alias, path in cited_files(open(notes).read(), repos):
             full = resolve(repos, alias, path)
