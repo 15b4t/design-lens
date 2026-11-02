@@ -1,0 +1,33 @@
+{
+  "mode": "learn",
+  "concept": "middleware-chain",
+  "present": true,
+  "confidence": "high",
+  "summary": "Express 5.3.0 holds only a thin facade: lib/application.js lazily creates a `router` package Router, proxies app.use/app.handle to it, and hands `finalhandler` in as the terminal `done` callback. The actual chain (ordered Layer stack, next() continuation, error-signature routing, promise rejection catching, per-route sub-stacks) lives in the `router` dependency, a linear next() pipeline rather than an onion.",
+  "components": [
+    {"role": "owner", "path": "router:index.js", "why": "Router.handle holds the ordered `stack` of Layers and the inner next(err) loop (~line 188) that walks it, with 'route'/'router' sentinel handling and setImmediate; `use` (~404) and `route` (~425-440) push Layers onto the stack"},
+    {"role": "owner", "path": "router:lib/layer.js", "why": "Layer.handleRequest (~142) and handleError (~106) invoke the user function, choosing by arity, and catch sync throws plus rejected promises and forward them to next(err)"},
+    {"role": "owner", "path": "router:lib/route.js", "why": "Route holds a per-route stack with its own next() loop (~119): per-method handlers form a nested chain inside the global chain"},
+    {"role": "client", "path": "express:lib/application.js", "why": "app.use (~181-235) delegates to router.use and wraps mounted sub-apps; the lazy `router` getter (~69-80) builds the Router once; app.handle (~152) is the entry"},
+    {"role": "infra", "path": "finalhandler:index.js", "why": "Terminal handler used as `done`: sends 404 when nothing responded, renders the error otherwise, destroys the socket if headers are already sent (~118-121)"},
+    {"role": "client", "path": "express:lib/express.js", "why": "exports the express() factory whose app is the request handler"}
+  ],
+  "entry_points": [
+    {"path": "express:lib/application.js:152", "why": "app.handle(req, res, callback) per request; builds `done` via finalhandler and calls this.router.handle"},
+    {"path": "express:lib/application.js:181", "why": "app.use registers middleware (global, path-scoped, or mounted sub-app) in registration order"},
+    {"path": "router:index.js:59", "why": "the `router` function is itself a (req,res,next) middleware, so routers nest"},
+    {"path": "router:index.js:188", "why": "inner next(err) is the continuation driving the chain"}
+  ],
+  "deps": [
+    {"name": "router", "installed": "2.2.0", "source": "router", "carries": "the entire chain mechanics: order, next(), arity-based error handlers, async rejection capture, scope, param processing"},
+    {"name": "finalhandler", "installed": "2.1.1", "source": "finalhandler", "carries": "end-of-chain fallback: 404, error rendering, socket destroy when headers already sent"}
+  ],
+  "searched": ["app.use", "next(err)", "router.use", "handle_request", "process_params", "next", "handle", "Layer", "stack", "finalhandler", "headersSent", "DL deps", "isPromise/then/setImmediate/stack.push in router"],
+  "rejected": [
+    {"path": "express:test/app.router.js", "why": "tests, not implementation"},
+    {"path": "express:test/Router.js", "why": "tests, not implementation"},
+    {"path": "express:lib/application.js:331", "why": "router.param / process_params is param pre-processing tied to route matching"}
+  ],
+  "nearest_if_absent": null,
+  "notes": "Express itself contains no chain code (lib/router does not exist in 5.x); verify behaviour against installed router 2.2.0. Async errors: Layer catches returned rejected promises, unlike Express 4. Body reading (D10) is not in this chain: body parsing is a separate middleware (not located). Chain built once lazily via the router getter (D9). Not verified: exact line for the double-write guard (finalhandler checks res.headersSent at ~84 and ~118)."
+}
