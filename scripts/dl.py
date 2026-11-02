@@ -160,6 +160,54 @@ def has_symbol(text, sym):
 # check: do the notes cite real code, honestly tagged?
 # ---------------------------------------------------------------------------------------------
 
+def cite_text(m, repos, cache, max_range, want_role):
+    """(problems, text of the cited range or None) for one citation match."""
+    alias, path = m.group(1), m.group(2)
+    a = int(m.group(3))
+    b = int(m.group(4) or a)
+    if alias not in repos:
+        return [f"unknown repo alias {alias!r} (register it with: dl.py repo add)"], None
+    problems = []
+    role = repos[alias].get("role", "code")
+    if want_role and role != want_role:
+        problems.append(f"[{want_role}] claim cites {alias!r}, which is registered as role {role!r}")
+    full = resolve(repos, alias, path)
+    if full is None:
+        return problems + [f"{alias}:{path} escapes the repo root"], None
+    src = read_lines(full, cache)
+    if src is None:
+        return problems + [f"{alias}:{path} does not exist"], None
+    if a < 1 or b > len(src) or a > b:
+        return problems + [f"{alias}:{path}:{a}-{b} out of range (file has {len(src)} lines)"], None
+    if b - a + 1 > max_range:
+        return problems + [f"{alias}:{path}:{a}-{b} spans {b - a + 1} lines (max {max_range}); "
+                           "a range that wide proves nothing, narrow it"], None
+    return problems, "\n".join(src[a - 1:b])
+
+
+PRECEDING_SYM_RX = re.compile(r"`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?:\(\))?`\s*$")
+
+
+def check_prose_cites(line, known, repos, cache, max_range):
+    """Lesson prose: each citation must be written (`Symbol` alias:path:A-B), and that symbol - the
+    one immediately before the citation - must appear inside that citation's own range. Other inline
+    code on the line is just prose and is not held to the range."""
+    problems = []
+    for m in known:
+        p, text = cite_text(m, repos, cache, max_range, None)
+        problems += p
+        if text is None:
+            continue
+        pre = PRECEDING_SYM_RX.search(line[:m.start()])
+        if not pre:
+            problems.append(f"{m.group(1)}:{m.group(2)}:{m.group(3)} is not preceded by its symbol; "
+                            "write it as (`Symbol` alias:path:START-END)")
+        elif not has_symbol(text, pre.group(1).split(".")[-1]):
+            problems.append(f"symbol {pre.group(1)!r} not found inside {m.group(1)}:{m.group(2)}:{m.group(3)}"
+                            f"{'-' + m.group(4) if m.group(4) else ''}")
+    return problems
+
+
 def check_line(line, repos, cache, max_range, require_tag=True):
     """Problems on one line of notes. A line that makes a claim about evidence carries one tag:
     [code] (the work repo), [dep] (installed dependency source), [upstream] (the technology's own
@@ -181,7 +229,7 @@ def check_line(line, repos, cache, max_range, require_tag=True):
             return []
         if require_tag:
             return ["cites code but carries no evidence tag ([code], [dep], [upstream], ...)"]
-        tag = "untagged"  # lesson prose: no role check, but the citation must still be real
+        return check_prose_cites(line, known, repos, cache, max_range)
     if tag in ("theory", "inferred"):
         if tag == "theory" and known:
             problems.append("[theory] line cites code; retag it [code]/[dep]/[upstream] or drop the citation")
@@ -190,32 +238,11 @@ def check_line(line, repos, cache, max_range, require_tag=True):
         return [f"[{tag}] claim has no alias:path:line citation"]
     ranges, text_parts = 0, []
     for m in cites:
-        alias, path = m.group(1), m.group(2)
-        a = int(m.group(3))
-        b = int(m.group(4) or a)
-        if alias not in repos:
-            problems.append(f"unknown repo alias {alias!r} (register it with: dl.py repo add)")
-            continue
-        role = repos[alias].get("role", "code")
-        if tag != "untagged" and role != tag:
-            problems.append(f"[{tag}] claim cites {alias!r}, which is registered as role {role!r}")
-        full = resolve(repos, alias, path)
-        if full is None:
-            problems.append(f"{alias}:{path} escapes the repo root")
-            continue
-        src = read_lines(full, cache)
-        if src is None:
-            problems.append(f"{alias}:{path} does not exist")
-            continue
-        if a < 1 or b > len(src) or a > b:
-            problems.append(f"{alias}:{path}:{a}-{b} out of range (file has {len(src)} lines)")
-            continue
-        if b - a + 1 > max_range:
-            problems.append(f"{alias}:{path}:{a}-{b} spans {b - a + 1} lines (max {max_range}); "
-                            "a range that wide proves nothing, narrow it")
-            continue
-        ranges += 1
-        text_parts.append("\n".join(src[a - 1:b]))
+        p, text = cite_text(m, repos, cache, max_range, None if tag == "untagged" else tag)
+        problems += p
+        if text is not None:
+            ranges += 1
+            text_parts.append(text)
     syms = []
     for s in SYM_RX.findall(line):
         s = s[:-2] if s.endswith("()") else s
@@ -252,9 +279,9 @@ def check_quotes(text, repos, cache):
     return problems
 
 
-def cmd_check(args):
-    home = home_dir(args)
-    d, meta = load_concept(home, args.concept)
+def run_check(home, slug, max_range):
+    """(ok_count, problems, tag_counts) for a concept's notes.md and lesson.md."""
+    d, meta = load_concept(home, slug)
     repos = load_repos(home)
     cache, bad, ok, counts = {}, [], 0, dict.fromkeys(TAGS, 0)
     files = [os.path.join(d, n) for n in ("notes.md", "lesson.md") if os.path.exists(os.path.join(d, n))]
@@ -262,7 +289,8 @@ def cmd_check(args):
         die(f"no notes.md or lesson.md in {d}")
     in_fence = False
     for path in files:
-        text = open(path).read()
+        with open(path) as f:
+            text = f.read()
         for lineno, line in enumerate(text.splitlines(), 1):
             if line.lstrip().startswith("```"):
                 in_fence = not in_fence
@@ -270,12 +298,17 @@ def cmd_check(args):
                 continue
             for t in TAG_RX.findall(line):
                 counts[t] += 1
-            problems = check_line(line, repos, cache, args.max_range,
+            problems = check_line(line, repos, cache, max_range,
                                   require_tag=os.path.basename(path) == "notes.md")
             if not problems:
-                ok += 1 if TAG_RX.search(line) else 0
+                ok += 1 if TAG_RX.search(line) or CITE_RX.search(line) else 0
             bad += [f"{os.path.basename(path)}:{lineno}: {p}" for p in problems]
         bad += [f"{os.path.basename(path)}: {p}" for p in check_quotes(text, repos, cache)]
+    return ok, bad, counts
+
+
+def cmd_check(args):
+    ok, bad, counts = run_check(home_dir(args), args.concept, args.max_range)
     print(f"claims ok: {ok}, problems: {len(bad)}")
     print("evidence mix: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
     for b in bad:

@@ -183,18 +183,35 @@ class ExpandAndQuotes(Env):
 
 class LessonRules(Env):
     def test_lesson_prose_may_cite_without_a_tag_but_notes_may_not(self):
-        self.cfile("lesson.md", "The ack lives in `Worker.run` (api:src/worker.ts:4-11).\n")
+        self.cfile("lesson.md", "The ack lives here (`Worker.run` api:src/worker.ts:4-11).\n")
         self.assertEqual(self.dl("check", "queues", ok=False).returncode, 0)
         os.remove(os.path.join(self.home, "concepts", "queues", "lesson.md"))
-        self.assertEqual(self.check("The ack lives in `Worker.run` (api:src/worker.ts:4-11).\n").returncode, 1)
+        self.assertEqual(self.check("The ack lives here (`Worker.run` api:src/worker.ts:4-11).\n").returncode, 1)
 
     def test_untagged_lesson_citation_is_still_verified(self):
-        self.cfile("lesson.md", "The ack is in `Worker.nothing` (api:src/worker.ts:4-11).\n")
+        self.cfile("lesson.md", "The ack is here (`Worker.nothing` api:src/worker.ts:4-11).\n")
         r = self.dl("check", "queues", ok=False)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("not found inside the cited range", r.stdout)
+        self.assertIn("not found inside api:src/worker.ts:4-11", r.stdout)
         self.cfile("lesson.md", "It lives in the old file (`Worker` api:src/gone.ts:1-3).\n")
         self.assertIn("does not exist", self.dl("check", "queues", ok=False).stdout)
+
+    def test_prose_other_inline_code_is_not_held_to_the_range(self):
+        self.cfile("lesson.md", "The `queue` and `handle` helpers matter, and the ack is in "
+                   "(`ack` api:src/worker.ts:4-11).\n")
+        self.assertEqual(self.dl("check", "queues", ok=False).returncode, 0)
+
+    def test_prose_citation_needs_its_own_preceding_symbol(self):
+        self.cfile("lesson.md", "The ack happens here (api:src/worker.ts:4-11).\n")
+        r = self.dl("check", "queues", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not preceded by its symbol", r.stdout)
+
+    def test_each_prose_citation_is_checked_against_its_own_range(self):
+        self.cfile("lesson.md", "Two facts (`ack` api:src/worker.ts:4-11; `target` api:src/worker.ts:4-11).\n")
+        r = self.dl("check", "queues", ok=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("'target' not found inside api:src/worker.ts:4-11", r.stdout)
 
     def test_expanded_caption_is_exempt(self):
         self.cfile("lesson.md", "*api:src/worker.ts:4-11*\n")
